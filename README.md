@@ -8,9 +8,13 @@ This is a Tauri-based native desktop rebuild of an earlier Python (CustomTkinter
 Instead of Python/pycaw, the audio backend **calls WASAPI / Core Audio COM directly from Rust via the `windows` crate**,
 while the UI reproduces the same cyberpunk neon / glassmorphism design in React + TypeScript.
 
-## 🖼️ Screenshot
+## 🖼️ Screenshots
 
 ![GlowAudio Desktop main window](docs/screenshot.png)
+
+Floating HUD overlay shown on a device switch:
+
+![GlowAudio HUD overlay](docs/hud.png)
 
 ---
 

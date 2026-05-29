@@ -12,6 +12,10 @@ UI는 React + TypeScript로 동일한 사이버펑크 네온/글래스모피즘 
 
 ![GlowAudio Desktop 메인 화면](docs/screenshot.png)
 
+장치 전환 시 나타나는 플로팅 HUD 오버레이:
+
+![GlowAudio HUD 오버레이](docs/hud.png)
+
 ---
 
 ## 🌟 주요 기능
