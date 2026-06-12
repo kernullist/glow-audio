@@ -17,6 +17,14 @@ export interface ProfileItem {
   device_name: string;
 }
 
+export interface RoutingRule {
+  match_exe: string;
+  target_device_id: string | null; // null -> system default
+  target_device_name: string;
+  is_comms: boolean;
+  enabled: boolean;
+}
+
 export const api = {
   listDevices: () => invoke<AudioDevice[]>("list_devices"),
   setDefault: (deviceId: string) => invoke<void>("set_default", { deviceId }),
@@ -36,4 +44,13 @@ export const api = {
   setHotkey: (hotkey: string) => invoke<void>("set_hotkey", { hotkey }),
 
   hideHud: () => invoke<void>("hide_hud"),
+
+  // v2 per-session routing
+  routingAvailable: () => invoke<boolean>("routing_available"),
+  getRoutingRules: () => invoke<RoutingRule[]>("get_routing_rules"),
+  setRoutingRule: (rule: RoutingRule) =>
+    invoke<RoutingRule[]>("set_routing_rule", { rule }),
+  removeRoutingRule: (matchExe: string) =>
+    invoke<RoutingRule[]>("remove_routing_rule", { matchExe }),
+  clearRouting: () => invoke<void>("clear_routing"),
 };

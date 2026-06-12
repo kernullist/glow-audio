@@ -3,16 +3,19 @@
 // and the floating HUD overlay window, and exposes commands to the React UI.
 
 mod audio;
+mod audio_router;
 mod monitor;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use sysinfo::System;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
@@ -20,8 +23,12 @@ use tauri::{
     WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
 
 use audio::AudioDevice;
+use audio_router::{Reconciler, RoutingEngine, RoutingRule};
 
 const DEFAULT_HOTKEY: &str = "Ctrl+Shift+A";
 const HUD_WIDTH: f64 = 340.0;
@@ -68,6 +75,20 @@ pub struct SharedState
     pub last_detected: Mutex<Option<String>>,
     pub monitor_running: AtomicBool,
     pub config_dir: Mutex<PathBuf>,
+    // v2 per-session routing
+    pub routing_rules: Mutex<Vec<RoutingRule>>,
+    pub routing_available: AtomicBool,
+}
+
+// Channel handle to the MTA audio worker. Wrapped in a Mutex so it is Sync and
+// can be managed as Tauri state (mpsc::Sender is Send but not Sync).
+pub struct AudioTx(pub Mutex<Sender<AudioCommand>>);
+
+pub enum AudioCommand
+{
+    Reconcile, // re-evaluate all routing rules and apply diffs
+    ClearAll,  // revert applied routes + nuke the OS persisted store
+    Shutdown,  // revert applied routes and exit the worker
 }
 
 impl SharedState
@@ -80,6 +101,20 @@ impl SharedState
     fn settings_path(&self) -> PathBuf
     {
         self.config_dir.lock().join("glow_settings.json")
+    }
+
+    fn routing_path(&self) -> PathBuf
+    {
+        self.config_dir.lock().join("glow_routing.json")
+    }
+
+    fn save_routing(&self)
+    {
+        let guard = self.routing_rules.lock();
+        if let Ok(json) = serde_json::to_string_pretty(&*guard)
+        {
+            let _ = std::fs::write(self.routing_path(), json);
+        }
     }
 
     fn save_profiles(&self)
@@ -119,6 +154,135 @@ impl SharedState
                 {
                     *self.hotkey.lock() = hk.to_string();
                 }
+            }
+        }
+        if let Ok(text) = std::fs::read_to_string(self.routing_path())
+        {
+            if let Ok(parsed) = serde_json::from_str::<Vec<RoutingRule>>(&text)
+            {
+                *self.routing_rules.lock() = parsed;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v2 audio worker (MTA / WinRT thread)
+// ---------------------------------------------------------------------------
+
+fn spawn_audio_worker(app: AppHandle, state: Arc<SharedState>) -> Sender<AudioCommand>
+{
+    let (tx, rx) = channel::<AudioCommand>();
+    let tx_for_ticker = tx.clone();
+    std::thread::spawn(move || {
+        unsafe {
+            let _ = RoInitialize(RO_INIT_MULTITHREADED);
+        }
+        audio_worker_loop(app, state, rx, tx_for_ticker);
+        unsafe {
+            RoUninitialize();
+        }
+    });
+    tx
+}
+
+fn audio_worker_loop(
+    app: AppHandle,
+    state: Arc<SharedState>,
+    rx: Receiver<AudioCommand>,
+    tx: Sender<AudioCommand>,
+)
+{
+    let enumerator: IMMDeviceEnumerator =
+        match unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+        {
+            Ok(e) => e,
+            Err(e) =>
+            {
+                eprintln!("[GlowAudio][v2-routing] enumerator failed: {e}");
+                return;
+            }
+        };
+
+    // Activate the per-session routing factory. On failure, leave routing
+    // disabled and let the UI fall back to v1 default switching.
+    let engine = match RoutingEngine::new()
+    {
+        Ok(e) =>
+        {
+            eprintln!("[GlowAudio][v2-routing] engine ready [{}]", e.which());
+            e
+        }
+        Err(e) =>
+        {
+            eprintln!("[GlowAudio][v2-routing] UNAVAILABLE: {e}");
+            state.routing_available.store(false, Ordering::Relaxed);
+            let _ = app.emit("routing-unavailable", format!("{e}"));
+            return;
+        }
+    };
+
+    state.routing_available.store(true, Ordering::Relaxed);
+    let _ = app.emit("routing-available", ());
+
+    let mut reconciler = Reconciler::new(engine);
+    let mut sys = System::new();
+    // Signature of the present render-endpoint set, to detect hotplug between
+    // ticks and notify the UI (we have no IMMNotificationClient yet).
+    let mut last_device_sig: Option<String> = None;
+
+    // Periodic safety-net reconcile (process start without session notifications).
+    let ticker = tx.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if ticker.send(AudioCommand::Reconcile).is_err()
+        {
+            break;
+        }
+    });
+
+    loop
+    {
+        match rx.recv()
+        {
+            Ok(AudioCommand::Reconcile) =>
+            {
+                sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+                // Detect device hotplug by comparing the present endpoint set and
+                // notify the UI so device lists/dropdowns refresh promptly.
+                if let Ok(devs) = audio_router::list_render_devices(&enumerator)
+                {
+                    let mut ids: Vec<String> = devs.into_iter().map(|(id, _)| id).collect();
+                    ids.sort();
+                    let sig = ids.join("|");
+                    if last_device_sig.as_deref() != Some(sig.as_str())
+                    {
+                        if last_device_sig.is_some()
+                        {
+                            let _ = app.emit("devices-changed", ());
+                        }
+                        last_device_sig = Some(sig);
+                    }
+                }
+
+                let rules = state.routing_rules.lock().clone();
+                if let Err(e) = reconciler.reconcile(&rules, &sys, &enumerator)
+                {
+                    eprintln!("[GlowAudio][v2-routing] reconcile failed: {e}");
+                }
+            }
+            Ok(AudioCommand::ClearAll) =>
+            {
+                sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                let _ = reconciler.revert_all(&sys);
+                let _ = reconciler.clear_os_store();
+            }
+            Ok(AudioCommand::Shutdown) | Err(_) =>
+            {
+                sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                let _ = reconciler.revert_all(&sys);
+                break;
             }
         }
     }
@@ -252,6 +416,77 @@ fn set_hotkey(app: AppHandle, state: State<Arc<SharedState>>, hotkey: String) ->
     *state.hotkey.lock() = hotkey;
     state.save_settings();
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// v2 routing commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn routing_available(state: State<Arc<SharedState>>) -> bool
+{
+    state.routing_available.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn get_routing_rules(state: State<Arc<SharedState>>) -> Vec<RoutingRule>
+{
+    state.routing_rules.lock().clone()
+}
+
+#[tauri::command]
+fn set_routing_rule(
+    state: State<Arc<SharedState>>,
+    tx: State<AudioTx>,
+    rule: RoutingRule,
+) -> Result<Vec<RoutingRule>, String>
+{
+    let mut rule = rule;
+    rule.match_exe = rule.match_exe.trim().to_lowercase();
+    if rule.match_exe.is_empty()
+    {
+        return Err("exe name is empty".into());
+    }
+    {
+        let mut rules = state.routing_rules.lock();
+        match rules.iter_mut().find(|r| r.match_exe == rule.match_exe)
+        {
+            Some(existing) =>
+            {
+                *existing = rule;
+            }
+            None =>
+            {
+                rules.push(rule);
+            }
+        }
+    }
+    state.save_routing();
+    let _ = tx.0.lock().send(AudioCommand::Reconcile);
+    Ok(state.routing_rules.lock().clone())
+}
+
+#[tauri::command]
+fn remove_routing_rule(
+    state: State<Arc<SharedState>>,
+    tx: State<AudioTx>,
+    match_exe: String,
+) -> Vec<RoutingRule>
+{
+    let exe = match_exe.trim().to_lowercase();
+    state.routing_rules.lock().retain(|r| r.match_exe != exe);
+    state.save_routing();
+    // reconcile reverts the now-unmatched PIDs back to system default.
+    let _ = tx.0.lock().send(AudioCommand::Reconcile);
+    state.routing_rules.lock().clone()
+}
+
+#[tauri::command]
+fn clear_routing(state: State<Arc<SharedState>>, tx: State<AudioTx>)
+{
+    state.routing_rules.lock().clear();
+    state.save_routing();
+    let _ = tx.0.lock().send(AudioCommand::ClearAll);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +644,8 @@ pub fn run()
         last_detected: Mutex::new(None),
         monitor_running: AtomicBool::new(true),
         config_dir: Mutex::new(PathBuf::from(".")),
+        routing_rules: Mutex::new(Vec::new()),
+        routing_available: AtomicBool::new(false),
     });
 
     let setup_state = state.clone();
@@ -442,6 +679,11 @@ pub fn run()
             get_hotkey,
             set_hotkey,
             hide_hud,
+            routing_available,
+            get_routing_rules,
+            set_routing_rule,
+            remove_routing_rule,
+            clear_routing,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -493,7 +735,14 @@ pub fn run()
             }
 
             // Launch the background process monitor.
-            monitor::spawn(handle, setup_state.clone());
+            monitor::spawn(handle.clone(), setup_state.clone());
+
+            // Launch the v2 per-session routing worker on a dedicated MTA/WinRT
+            // thread. It activates IAudioPolicyConfigFactory (modern/legacy IID)
+            // and, on failure, emits "routing-unavailable" so the UI falls back
+            // to v1 default switching.
+            let audio_tx = spawn_audio_worker(handle, setup_state.clone());
+            app.manage(AudioTx(Mutex::new(audio_tx)));
 
             Ok(())
         })

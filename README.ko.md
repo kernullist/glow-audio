@@ -28,6 +28,7 @@ UI는 React + TypeScript로 동일한 사이버펑크 네온/글래스모피즘 
 4. **게임 자동 라우팅 엔진** — `sysinfo` 기반 백그라운드 스레드가 2초마다 프로세스를 스캔,
    등록된 게임 실행 시 지정 장치로 자동 전환.
 5. **플로팅 HUD 오버레이** — 무테·투명·항상 위 별도 윈도우를 우하단에 페이드 인/아웃.
+6. **앱별 오디오 라우팅 (v2)** — 비공개 COM `IAudioPolicyConfigFactory`로 개별 앱(Chrome·Discord·게임)을 *동시에* 서로 다른 출력 장치로 라우팅. 오디오 세션 PID 기준으로 적용하며, 미지원 빌드에선 기본 장치 전환으로 자동 강등.
 
 ---
 
@@ -44,8 +45,9 @@ glow-audio/
 └─ src-tauri/               # Rust 백엔드
    └─ src/
       ├─ audio.rs           # WASAPI/COM 오디오 엔진 + IPolicyConfig 정의
+      ├─ audio_router.rs    # v2 앱별 라우팅 (IAudioPolicyConfigFactory)
       ├─ monitor.rs         # 프로세스 감시 + 자동 라우팅 스레드
-      └─ lib.rs             # command, 전역 단축키, HUD, 설정 영속화
+      └─ lib.rs             # command, 전역 단축키, HUD, 라우팅 워커, 영속화
 ```
 
 설정/프로필은 OS 앱 설정 디렉터리(`%APPDATA%\com.kernullist.glowaudio\`)의

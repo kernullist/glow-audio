@@ -457,6 +457,31 @@ body {
   margin-bottom: 10px;
 }
 
+.notice {
+  background: #2a2030;
+  border: 1px solid var(--purple);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: #d8b8ff;
+  line-height: 1.5;
+}
+
+.comms-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.comms-toggle input {
+  accent-color: var(--cyan);
+}
+
 .profile-row {
   display: flex;
   align-items: center;

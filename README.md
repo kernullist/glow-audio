@@ -29,6 +29,7 @@ Floating HUD overlay shown on a device switch:
 4. **Game auto-routing engine** — a `sysinfo`-based background thread scans processes every 2 seconds and
    auto-switches to the mapped device when a registered game launches.
 5. **Floating HUD overlay** — a borderless, transparent, always-on-top window that fades in/out at the bottom-right.
+6. **Per-app audio routing (v2)** — send individual apps (Chrome, Discord, games) to different output devices *simultaneously* via the undocumented `IAudioPolicyConfigFactory`, resolved per audio-session PID. Falls back gracefully to default-device switching on builds that don't support it.
 
 ---
 
@@ -45,8 +46,9 @@ glow-audio/
 └─ src-tauri/               # Rust backend
    └─ src/
       ├─ audio.rs           # WASAPI/COM audio engine + IPolicyConfig definition
+      ├─ audio_router.rs    # v2 per-session routing (IAudioPolicyConfigFactory)
       ├─ monitor.rs         # Process monitor + auto-routing thread
-      └─ lib.rs             # Commands, global hotkey, HUD, settings persistence
+      └─ lib.rs             # Commands, global hotkey, HUD, routing worker, persistence
 ```
 
 Settings and profiles are stored in the OS app-config directory

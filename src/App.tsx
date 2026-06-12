@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, AudioDevice, ProfileItem } from "./api";
+import { api, AudioDevice, ProfileItem, RoutingRule } from "./api";
 
-type Tab = "devices" | "profiles" | "settings";
+type Tab = "devices" | "profiles" | "routing" | "settings";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("devices");
@@ -19,6 +19,7 @@ export default function App() {
       <main className="workspace">
         {tab === "devices" && <DevicesView />}
         {tab === "profiles" && <ProfilesView />}
+        {tab === "routing" && <RoutingView />}
         {tab === "settings" && (
           <SettingsView hotkey={hotkey} onHotkeyChange={setHotkey} />
         )}
@@ -43,6 +44,7 @@ function Sidebar({
   const items: { key: Tab; label: string; icon: string }[] = [
     { key: "devices", label: "Playback Devices", icon: "🔊" },
     { key: "profiles", label: "Game Profiles", icon: "🎮" },
+    { key: "routing", label: "App Routing", icon: "🎚️" },
     { key: "settings", label: "Global Settings", icon: "⚙️" },
   ];
 
@@ -347,6 +349,152 @@ function ProfilesView() {
             <span className="profile-arrow">➡️</span>
             <span className="profile-dev">{p.device_name}</span>
             <button className="btn-del" onClick={() => void remove(p.app)}>
+              🗑️ Delete
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App Routing tab (v2 per-session routing)
+// ---------------------------------------------------------------------------
+
+function RoutingView() {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [rules, setRules] = useState<RoutingRule[]>([]);
+  const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [appName, setAppName] = useState("");
+  const [deviceId, setDeviceId] = useState(""); // "" -> system default
+  const [isComms, setIsComms] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const [avail, ruleList, list] = await Promise.all([
+      api.routingAvailable(),
+      api.getRoutingRules(),
+      api.listDevices(),
+    ]);
+    setAvailable(avail);
+    setRules(ruleList);
+    setDevices(list.filter((d) => d.state === "Active"));
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const un1 = listen("routing-available", () => setAvailable(true));
+    const un2 = listen("routing-unavailable", () => setAvailable(false));
+    return () => {
+      void un1.then((f) => f());
+      void un2.then((f) => f());
+    };
+  }, [refresh]);
+
+  const add = async () => {
+    const name = appName.trim();
+    if (!name) return;
+    const dev = devices.find((d) => d.id === deviceId);
+    const rule: RoutingRule = {
+      match_exe: name,
+      target_device_id: deviceId === "" ? null : deviceId,
+      target_device_name: deviceId === "" ? "System default" : dev?.name ?? "",
+      is_comms: isComms,
+      enabled: true,
+    };
+    setRules(await api.setRoutingRule(rule));
+    setAppName("");
+    setIsComms(false);
+  };
+
+  const remove = async (exe: string) => {
+    setRules(await api.removeRoutingRule(exe));
+  };
+
+  const reset = async () => {
+    await api.clearRouting();
+    setRules([]);
+  };
+
+  return (
+    <div className="view">
+      <header className="view-head">
+        <h1>Per-App Audio Routing</h1>
+        {rules.length > 0 && (
+          <button className="btn-del" onClick={() => void reset()}>
+            ♻️ Reset routing
+          </button>
+        )}
+      </header>
+
+      {available === false && (
+        <div className="notice">
+          Per-app routing isn't available on this Windows build. The app falls
+          back to default-device switching (Playback Devices / Game Profiles).
+        </div>
+      )}
+
+      <div className="add-card">
+        <div className="add-title">Route an application to a device</div>
+        <div className="add-row">
+          <input
+            className="text-input"
+            placeholder="e.g. chrome.exe or discord.exe"
+            value={appName}
+            onChange={(e) => setAppName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void add()}
+            disabled={available === false}
+          />
+          <select
+            className="select"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+            disabled={available === false}
+          >
+            <option value="">System default</option>
+            {devices.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          <label className="comms-toggle">
+            <input
+              type="checkbox"
+              checked={isComms}
+              onChange={(e) => setIsComms(e.target.checked)}
+              disabled={available === false}
+            />
+            Comms
+          </label>
+          <button
+            className="btn-primary"
+            onClick={() => void add()}
+            disabled={available === false}
+          >
+            ➕ Add Rule
+          </button>
+        </div>
+      </div>
+
+      <div className="list-title">Active Routing Rules</div>
+      <div className="scroll">
+        {rules.length === 0 && (
+          <div className="empty">
+            No per-app routing rules yet. Add one above to send an app's audio to
+            a specific device while others stay on the system default.
+          </div>
+        )}
+        {rules.map((r) => (
+          <div className="profile-row" key={r.match_exe}>
+            <span className="profile-icon">🎚️</span>
+            <span className="profile-app">{r.match_exe}</span>
+            <span className="profile-arrow">➡️</span>
+            <span className="profile-dev">
+              {r.target_device_id ? r.target_device_name : "System default"}
+            </span>
+            {r.is_comms && <span className="tag-comm">● Comms</span>}
+            <button className="btn-del" onClick={() => void remove(r.match_exe)}>
               🗑️ Delete
             </button>
           </div>
