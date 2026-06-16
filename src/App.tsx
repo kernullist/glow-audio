@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, AudioDevice, ProfileItem, RoutingRule } from "./api";
+import {
+  api,
+  AppSession,
+  AudioDevice,
+  ProfileItem,
+  RoutingRule,
+  VolumeRule,
+} from "./api";
 
-type Tab = "devices" | "profiles" | "routing" | "settings";
+type Tab = "devices" | "profiles" | "routing" | "volume" | "settings";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("devices");
@@ -20,6 +27,7 @@ export default function App() {
         {tab === "devices" && <DevicesView />}
         {tab === "profiles" && <ProfilesView />}
         {tab === "routing" && <RoutingView />}
+        {tab === "volume" && <VolumeView />}
         {tab === "settings" && (
           <SettingsView hotkey={hotkey} onHotkeyChange={setHotkey} />
         )}
@@ -45,6 +53,7 @@ function Sidebar({
     { key: "devices", label: "Playback Devices", icon: "🔊" },
     { key: "profiles", label: "Game Profiles", icon: "🎮" },
     { key: "routing", label: "App Routing", icon: "🎚️" },
+    { key: "volume", label: "App Volume", icon: "🎛️" },
     { key: "settings", label: "Global Settings", icon: "⚙️" },
   ];
 
@@ -499,6 +508,181 @@ function RoutingView() {
             </button>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App Volume tab (per-app session volume + remembered levels)
+// ---------------------------------------------------------------------------
+
+function VolumeView() {
+  const [sessions, setSessions] = useState<AppSession[]>([]);
+  const [rules, setRules] = useState<VolumeRule[]>([]);
+
+  const refresh = useCallback(async () => {
+    const [s, r] = await Promise.all([
+      api.listAppSessions(),
+      api.getVolumeRules(),
+    ]);
+    setSessions(s);
+    setRules(r);
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const t = window.setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, 1500);
+    return () => window.clearInterval(t);
+  }, [refresh]);
+
+  const remembered = (exe: string) => rules.some((r) => r.match_exe === exe);
+
+  const toggleRemember = async (s: AppSession) => {
+    if (remembered(s.exe)) {
+      setRules(await api.removeVolumeRule(s.exe));
+    } else {
+      setRules(
+        await api.setVolumeRule({
+          match_exe: s.exe,
+          volume: s.volume,
+          muted: s.muted,
+          enabled: true,
+        })
+      );
+    }
+  };
+
+  // Keep the remembered value in sync while the app stays checked.
+  const syncRule = async (exe: string, volume: number, muted: boolean) => {
+    if (remembered(exe)) {
+      await api.setVolumeRule({ match_exe: exe, volume, muted, enabled: true });
+    }
+  };
+
+  return (
+    <div className="view">
+      <header className="view-head">
+        <h1>Per-App Volume</h1>
+        <button className="btn-ghost" onClick={() => void refresh()}>
+          🔄 Refresh
+        </button>
+      </header>
+
+      <p className="settings-desc">
+        Adjust the volume of each app that's currently playing audio. Tick{" "}
+        <b>Remember</b> and GlowAudio re-applies that level automatically the next
+        time the app starts.
+      </p>
+
+      <div className="scroll">
+        {sessions.length === 0 && (
+          <div className="empty">No apps are playing audio right now.</div>
+        )}
+        {sessions.map((s) => (
+          <SessionRow
+            key={s.exe}
+            session={s}
+            remembered={remembered(s.exe)}
+            onRemember={() => void toggleRemember(s)}
+            onAfterChange={syncRule}
+          />
+        ))}
+
+        {rules.length > 0 && (
+          <>
+            <div className="list-title" style={{ marginTop: 18 }}>
+              Remembered Apps
+            </div>
+            <div className="remembered-list">
+              {rules.map((r) => (
+                <span className="remembered-chip" key={r.match_exe}>
+                  {r.match_exe} · {Math.round(r.volume * 100)}%
+                  {r.muted ? " · muted" : ""}
+                  <button
+                    className="chip-x"
+                    title="Forget"
+                    onClick={() =>
+                      void api.removeVolumeRule(r.match_exe).then(setRules)
+                    }
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SessionRow({
+  session,
+  remembered,
+  onRemember,
+  onAfterChange,
+}: {
+  session: AppSession;
+  remembered: boolean;
+  onRemember: () => void;
+  onAfterChange: (exe: string, volume: number, muted: boolean) => void;
+}) {
+  const [vol, setVol] = useState(Math.round(session.volume * 100));
+
+  useEffect(() => {
+    setVol(Math.round(session.volume * 100));
+  }, [session.volume]);
+
+  const onVolume = (value: number) => {
+    setVol(value);
+    void api.setAppVolume(session.exe, value / 100);
+    void onAfterChange(session.exe, value / 100, session.muted);
+  };
+
+  const toggleMute = async () => {
+    await api.setAppMute(session.exe, !session.muted);
+    void onAfterChange(session.exe, session.volume, !session.muted);
+  };
+
+  return (
+    <div className={`card ${remembered ? "card-active" : ""}`}>
+      <div className="card-icon">{session.muted ? "🔇" : "🔊"}</div>
+
+      <div className="card-main">
+        <div className="card-name">
+          {session.display_name}
+          {session.session_count > 1 ? ` (${session.session_count})` : ""}
+        </div>
+        <div className="badges">
+          <span className="session-exe">{session.exe}</span>
+        </div>
+      </div>
+
+      <div className="card-controls">
+        <button
+          className="btn-icon"
+          title={session.muted ? "Unmute" : "Mute"}
+          onClick={() => void toggleMute()}
+        >
+          {session.muted ? "🔇" : "🔊"}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={vol}
+          onChange={(e) => onVolume(Number(e.target.value))}
+          className="slider"
+        />
+        <span className="vol-label">{vol}%</span>
+        <label className="comms-toggle">
+          <input type="checkbox" checked={remembered} onChange={onRemember} />
+          Remember
+        </label>
       </div>
     </div>
   );

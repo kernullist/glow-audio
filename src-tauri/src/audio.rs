@@ -94,7 +94,7 @@ thread_local! {
     };
 }
 
-fn ensure_com()
+pub(crate) fn ensure_com()
 {
     COM_GUARD.with(|_| {});
 }

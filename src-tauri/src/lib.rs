@@ -4,6 +4,7 @@
 
 mod audio;
 mod audio_router;
+mod audio_volume;
 mod monitor;
 
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTIT
 
 use audio::AudioDevice;
 use audio_router::{Reconciler, RoutingEngine, RoutingRule};
+use audio_volume::{AppSession, VolumeApplier, VolumeRule};
 
 const DEFAULT_HOTKEY: &str = "Ctrl+Shift+A";
 const HUD_WIDTH: f64 = 340.0;
@@ -78,6 +80,8 @@ pub struct SharedState
     // v2 per-session routing
     pub routing_rules: Mutex<Vec<RoutingRule>>,
     pub routing_available: AtomicBool,
+    // per-app remembered volume rules
+    pub volume_rules: Mutex<Vec<VolumeRule>>,
 }
 
 // Channel handle to the MTA audio worker. Wrapped in a Mutex so it is Sync and
@@ -108,12 +112,26 @@ impl SharedState
         self.config_dir.lock().join("glow_routing.json")
     }
 
+    fn volume_path(&self) -> PathBuf
+    {
+        self.config_dir.lock().join("glow_volume.json")
+    }
+
     fn save_routing(&self)
     {
         let guard = self.routing_rules.lock();
         if let Ok(json) = serde_json::to_string_pretty(&*guard)
         {
             let _ = std::fs::write(self.routing_path(), json);
+        }
+    }
+
+    fn save_volume(&self)
+    {
+        let guard = self.volume_rules.lock();
+        if let Ok(json) = serde_json::to_string_pretty(&*guard)
+        {
+            let _ = std::fs::write(self.volume_path(), json);
         }
     }
 
@@ -161,6 +179,13 @@ impl SharedState
             if let Ok(parsed) = serde_json::from_str::<Vec<RoutingRule>>(&text)
             {
                 *self.routing_rules.lock() = parsed;
+            }
+        }
+        if let Ok(text) = std::fs::read_to_string(self.volume_path())
+        {
+            if let Ok(parsed) = serde_json::from_str::<Vec<VolumeRule>>(&text)
+            {
+                *self.volume_rules.lock() = parsed;
             }
         }
     }
@@ -226,6 +251,7 @@ fn audio_worker_loop(
     let _ = app.emit("routing-available", ());
 
     let mut reconciler = Reconciler::new(engine);
+    let mut volume_applier = VolumeApplier::new();
     let mut sys = System::new();
     // Signature of the present render-endpoint set, to detect hotplug between
     // ticks and notify the UI (we have no IMMNotificationClient yet).
@@ -271,6 +297,10 @@ fn audio_worker_loop(
                 {
                     eprintln!("[GlowAudio][v2-routing] reconcile failed: {e}");
                 }
+
+                // Apply remembered per-app volumes to newly-seen sessions.
+                let vol_rules = state.volume_rules.lock().clone();
+                volume_applier.apply(&enumerator, &vol_rules);
             }
             Ok(AudioCommand::ClearAll) =>
             {
@@ -490,6 +520,85 @@ fn clear_routing(state: State<Arc<SharedState>>, tx: State<AudioTx>)
 }
 
 // ---------------------------------------------------------------------------
+// Per-app volume commands
+// ---------------------------------------------------------------------------
+
+// Build a render device enumerator on the current (COM-initialized) thread.
+fn render_enumerator() -> Option<IMMDeviceEnumerator>
+{
+    audio::ensure_com();
+    unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.ok()
+}
+
+#[tauri::command]
+fn list_app_sessions() -> Vec<AppSession>
+{
+    match render_enumerator()
+    {
+        Some(en) => audio_volume::list_app_sessions(&en),
+        None => Vec::new(),
+    }
+}
+
+#[tauri::command]
+fn set_app_volume(exe: String, volume: f32) -> Result<(), String>
+{
+    let en = render_enumerator().ok_or("audio enumerator unavailable")?;
+    audio_volume::set_app_volume(&en, &exe.to_lowercase(), volume)
+}
+
+#[tauri::command]
+fn set_app_mute(exe: String, mute: bool) -> Result<(), String>
+{
+    let en = render_enumerator().ok_or("audio enumerator unavailable")?;
+    audio_volume::set_app_mute(&en, &exe.to_lowercase(), mute)
+}
+
+#[tauri::command]
+fn get_volume_rules(state: State<Arc<SharedState>>) -> Vec<VolumeRule>
+{
+    state.volume_rules.lock().clone()
+}
+
+#[tauri::command]
+fn set_volume_rule(
+    state: State<Arc<SharedState>>,
+    tx: State<AudioTx>,
+    rule: VolumeRule,
+) -> Vec<VolumeRule>
+{
+    let mut rule = rule;
+    rule.match_exe = rule.match_exe.trim().to_lowercase();
+    {
+        let mut rules = state.volume_rules.lock();
+        match rules.iter_mut().find(|r| r.match_exe == rule.match_exe)
+        {
+            Some(existing) =>
+            {
+                *existing = rule;
+            }
+            None =>
+            {
+                rules.push(rule);
+            }
+        }
+    }
+    state.save_volume();
+    // Nudge the worker so a currently-running matching app gets the value now.
+    let _ = tx.0.lock().send(AudioCommand::Reconcile);
+    state.volume_rules.lock().clone()
+}
+
+#[tauri::command]
+fn remove_volume_rule(state: State<Arc<SharedState>>, match_exe: String) -> Vec<VolumeRule>
+{
+    let exe = match_exe.trim().to_lowercase();
+    state.volume_rules.lock().retain(|r| r.match_exe != exe);
+    state.save_volume();
+    state.volume_rules.lock().clone()
+}
+
+// ---------------------------------------------------------------------------
 // Hotkey cycling + HUD
 // ---------------------------------------------------------------------------
 
@@ -646,6 +755,7 @@ pub fn run()
         config_dir: Mutex::new(PathBuf::from(".")),
         routing_rules: Mutex::new(Vec::new()),
         routing_available: AtomicBool::new(false),
+        volume_rules: Mutex::new(Vec::new()),
     });
 
     let setup_state = state.clone();
@@ -684,6 +794,12 @@ pub fn run()
             set_routing_rule,
             remove_routing_rule,
             clear_routing,
+            list_app_sessions,
+            set_app_volume,
+            set_app_mute,
+            get_volume_rules,
+            set_volume_rule,
+            remove_volume_rule,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

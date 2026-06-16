@@ -482,6 +482,46 @@ body {
   accent-color: var(--cyan);
 }
 
+.session-exe {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.remembered-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0 10px;
+}
+
+.remembered-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cyan);
+  background: #1b1d28;
+  border: 1px solid #2b2d3c;
+  border-radius: 6px;
+  padding: 5px 8px 5px 10px;
+}
+
+.chip-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.chip-x:hover {
+  color: var(--red);
+}
+
 .profile-row {
   display: flex;
   align-items: center;

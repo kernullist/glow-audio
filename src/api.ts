@@ -25,6 +25,21 @@ export interface RoutingRule {
   enabled: boolean;
 }
 
+export interface AppSession {
+  exe: string;
+  display_name: string;
+  volume: number; // 0.0 - 1.0
+  muted: boolean;
+  session_count: number;
+}
+
+export interface VolumeRule {
+  match_exe: string;
+  volume: number; // 0.0 - 1.0
+  muted: boolean;
+  enabled: boolean;
+}
+
 export const api = {
   listDevices: () => invoke<AudioDevice[]>("list_devices"),
   setDefault: (deviceId: string) => invoke<void>("set_default", { deviceId }),
@@ -53,4 +68,16 @@ export const api = {
   removeRoutingRule: (matchExe: string) =>
     invoke<RoutingRule[]>("remove_routing_rule", { matchExe }),
   clearRouting: () => invoke<void>("clear_routing"),
+
+  // per-app volume
+  listAppSessions: () => invoke<AppSession[]>("list_app_sessions"),
+  setAppVolume: (exe: string, volume: number) =>
+    invoke<void>("set_app_volume", { exe, volume }),
+  setAppMute: (exe: string, mute: boolean) =>
+    invoke<void>("set_app_mute", { exe, mute }),
+  getVolumeRules: () => invoke<VolumeRule[]>("get_volume_rules"),
+  setVolumeRule: (rule: VolumeRule) =>
+    invoke<VolumeRule[]>("set_volume_rule", { rule }),
+  removeVolumeRule: (matchExe: string) =>
+    invoke<VolumeRule[]>("remove_volume_rule", { matchExe }),
 };
