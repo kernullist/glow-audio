@@ -638,7 +638,7 @@ fn cycle_default_device() -> Option<(String, i32)>
 }
 
 // Position the HUD at the bottom-right of the primary monitor and show it.
-fn show_hud(app: &AppHandle, title: &str, subtitle: &str, volume: i32)
+pub(crate) fn show_hud(app: &AppHandle, title: &str, subtitle: &str, volume: i32)
 {
     if let Some(hud) = app.get_webview_window("hud")
     {
@@ -712,7 +712,25 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()>
             }
             "quit" =>
             {
-                app.exit(0);
+                // Ask the audio worker to revert per-app routes before exiting so
+                // no ghost routing lingers in the OS persisted store. The rules
+                // stay saved and re-apply on next launch.
+                let sent = app
+                    .try_state::<AudioTx>()
+                    .map(|tx| tx.0.lock().send(AudioCommand::Shutdown).is_ok())
+                    .unwrap_or(false);
+                if sent
+                {
+                    let handle = app.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(600));
+                        handle.exit(0);
+                    });
+                }
+                else
+                {
+                    app.exit(0);
+                }
             }
             _ =>
             {

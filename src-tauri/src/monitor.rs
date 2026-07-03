@@ -91,6 +91,15 @@ pub fn spawn(app: AppHandle, state: Arc<SharedState>)
                             },
                         );
                         let _ = app.emit("devices-changed", ());
+
+                        // Show the HUD overlay so the switch is visible in-game.
+                        let volume = (target.volume * 100.0).round() as i32;
+                        crate::show_hud(
+                            &app,
+                            &format!("App Launch: {app_name}"),
+                            device_name,
+                            volume,
+                        );
                     }
                     else
                     {

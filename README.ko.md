@@ -38,7 +38,7 @@ UI는 React + TypeScript로 동일한 사이버펑크 네온/글래스모피즘 
 ```
 glow-audio/
 ├─ src/                     # React + TypeScript 프론트엔드
-│  ├─ App.tsx               # 메인 UI (Devices / Profiles / Settings 3탭)
+│  ├─ App.tsx               # 메인 UI (Devices / Profiles / Routing / Volume / Settings 5탭)
 │  ├─ Hud.tsx               # 플로팅 HUD 오버레이 컴포넌트
 │  ├─ api.ts                # Rust command 타입 래퍼
 │  ├─ main.tsx              # ?view=hud 쿼리로 메인/HUD 분기

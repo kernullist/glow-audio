@@ -39,7 +39,7 @@ Floating HUD overlay shown on a device switch:
 ```
 glow-audio/
 ├─ src/                     # React + TypeScript frontend
-│  ├─ App.tsx               # Main UI (Devices / Profiles / Settings tabs)
+│  ├─ App.tsx               # Main UI (Devices / Profiles / Routing / Volume / Settings)
 │  ├─ Hud.tsx               # Floating HUD overlay component
 │  ├─ api.ts                # Typed wrappers around the Rust commands
 │  ├─ main.tsx              # Routes main vs HUD via the ?view=hud query

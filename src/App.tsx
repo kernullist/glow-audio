@@ -394,9 +394,12 @@ function RoutingView() {
     void refresh();
     const un1 = listen("routing-available", () => setAvailable(true));
     const un2 = listen("routing-unavailable", () => setAvailable(false));
+    // Keep the device dropdown current when endpoints are hot-plugged.
+    const un3 = listen("devices-changed", () => void refresh());
     return () => {
       void un1.then((f) => f());
       void un2.then((f) => f());
+      void un3.then((f) => f());
     };
   }, [refresh]);
 
@@ -540,17 +543,14 @@ function VolumeView() {
 
   const remembered = (exe: string) => rules.some((r) => r.match_exe === exe);
 
-  const toggleRemember = async (s: AppSession) => {
-    if (remembered(s.exe)) {
-      setRules(await api.removeVolumeRule(s.exe));
+  // volume/muted come from the row's live controls, not the last poll, so the
+  // value saved is exactly what the user just set.
+  const toggleRemember = async (exe: string, volume: number, muted: boolean) => {
+    if (remembered(exe)) {
+      setRules(await api.removeVolumeRule(exe));
     } else {
       setRules(
-        await api.setVolumeRule({
-          match_exe: s.exe,
-          volume: s.volume,
-          muted: s.muted,
-          enabled: true,
-        })
+        await api.setVolumeRule({ match_exe: exe, volume, muted, enabled: true })
       );
     }
   };
@@ -586,7 +586,9 @@ function VolumeView() {
             key={s.exe}
             session={s}
             remembered={remembered(s.exe)}
-            onRemember={() => void toggleRemember(s)}
+            onRemember={(volume, muted) =>
+              void toggleRemember(s.exe, volume, muted)
+            }
             onAfterChange={syncRule}
           />
         ))}
@@ -628,7 +630,7 @@ function SessionRow({
 }: {
   session: AppSession;
   remembered: boolean;
-  onRemember: () => void;
+  onRemember: (volume: number, muted: boolean) => void;
   onAfterChange: (exe: string, volume: number, muted: boolean) => void;
 }) {
   const [vol, setVol] = useState(Math.round(session.volume * 100));
@@ -645,7 +647,8 @@ function SessionRow({
 
   const toggleMute = async () => {
     await api.setAppMute(session.exe, !session.muted);
-    void onAfterChange(session.exe, session.volume, !session.muted);
+    // Sync with the live slider value, not the last-polled session volume.
+    void onAfterChange(session.exe, vol / 100, !session.muted);
   };
 
   return (
@@ -680,7 +683,11 @@ function SessionRow({
         />
         <span className="vol-label">{vol}%</span>
         <label className="comms-toggle">
-          <input type="checkbox" checked={remembered} onChange={onRemember} />
+          <input
+            type="checkbox"
+            checked={remembered}
+            onChange={() => onRemember(vol / 100, session.muted)}
+          />
           Remember
         </label>
       </div>
