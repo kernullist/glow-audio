@@ -2,6 +2,8 @@
 
 [English](README.md) · **한국어**
 
+[![CI](https://github.com/kernullist/glow-audio/actions/workflows/ci.yml/badge.svg)](https://github.com/kernullist/glow-audio/actions/workflows/ci.yml)
+
 > **Windows 실제 재생 장치를 직접 제어하고, 게임 감지 자동 전환과 전역 단축키 HUD를 제공하는 네온 오디오 유틸리티 — Tauri v2 + React + Rust 재구현판**
 
 기존 Python(CustomTkinter) 프로토타입을 Tauri 기반 네이티브 데스크톱 앱으로 재구현했습니다.
@@ -30,7 +32,8 @@ UI는 React + TypeScript로 동일한 사이버펑크 네온/글래스모피즘 
 5. **플로팅 HUD 오버레이** — 무테·투명·항상 위 별도 윈도우를 우하단에 페이드 인/아웃.
 6. **앱별 오디오 라우팅 (v2)** — 비공개 COM `IAudioPolicyConfigFactory`로 개별 앱(Chrome·Discord·게임)을 *동시에* 서로 다른 출력 장치로 라우팅. 오디오 세션 PID 기준으로 적용하며, 미지원 빌드에선 기본 장치 전환으로 자동 강등.
 7. **앱별 볼륨 조절** — `ISimpleAudioVolume`로 앱마다 볼륨/뮤트를 Windows 볼륨 믹서처럼 조절. 앱을 "기억"해두면 다음 실행 시 저장된 볼륨을 자동 복원.
-8. **Windows 시작 시 자동 실행** — Global Settings의 토글로 로그인 시 트레이에 자동 기동. 자동 전환·볼륨 복원이 항상 대기 상태가 됩니다.
+8. **Windows 시작 시 자동 실행** — Global Settings의 토글로 로그인 시 트레이에 조용히 자동 기동. 트레이 메뉴에서 원클릭 장치 순환도 지원합니다.
+9. **파일 로그** — 런타임 로그를 OS 앱 로그 디렉터리에 기록(`tauri-plugin-log`)해 릴리스 빌드에서도 문제를 진단할 수 있습니다.
 
 ---
 

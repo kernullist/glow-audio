@@ -2,6 +2,8 @@
 
 **English** · [한국어](README.ko.md)
 
+[![CI](https://github.com/kernullist/glow-audio/actions/workflows/ci.yml/badge.svg)](https://github.com/kernullist/glow-audio/actions/workflows/ci.yml)
+
 > **A neon audio utility that controls real Windows playback devices directly, auto-switches on game launch, and offers a global-hotkey HUD — a Tauri v2 + React + Rust reimplementation.**
 
 This is a Tauri-based native desktop rebuild of an earlier Python (CustomTkinter) prototype.
@@ -31,7 +33,8 @@ Floating HUD overlay shown on a device switch:
 5. **Floating HUD overlay** — a borderless, transparent, always-on-top window that fades in/out at the bottom-right.
 6. **Per-app audio routing (v2)** — send individual apps (Chrome, Discord, games) to different output devices *simultaneously* via the undocumented `IAudioPolicyConfigFactory`, resolved per audio-session PID. Falls back gracefully to default-device switching on builds that don't support it.
 7. **Per-app volume control** — adjust each app's volume/mute (`ISimpleAudioVolume`) like the Windows Volume Mixer; "remember" an app to auto-restore its level the next time it launches.
-8. **Start with Windows** — optional autostart toggle in Global Settings, so auto-switching and volume restore are always armed after login.
+8. **Start with Windows** — optional autostart toggle in Global Settings; autostarted instances launch quietly into the tray. The tray menu also offers one-click device cycling.
+9. **File logging** — runtime logs go to the OS app-log directory (`tauri-plugin-log`), so issues in release builds are diagnosable.
 
 ---
 

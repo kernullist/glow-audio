@@ -412,19 +412,22 @@ function RoutingView() {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [playing, setPlaying] = useState<AppSession[]>([]);
   const [appName, setAppName] = useState("");
   const [deviceId, setDeviceId] = useState(""); // "" -> system default
   const [isComms, setIsComms] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [avail, ruleList, list] = await Promise.all([
+    const [avail, ruleList, list, sessions] = await Promise.all([
       api.routingAvailable(),
       api.getRoutingRules(),
       api.listDevices(),
+      api.listAppSessions(),
     ]);
     setAvailable(avail);
     setRules(ruleList);
     setDevices(list.filter((d) => d.state === "Active"));
+    setPlaying(sessions);
   }, []);
 
   useEffect(() => {
@@ -485,6 +488,22 @@ function RoutingView() {
 
       <div className="add-card">
         <div className="add-title">Route an application to a device</div>
+        {playing.length > 0 && (
+          <div className="playing-row">
+            <span className="playing-label">Now playing:</span>
+            {playing.map((s) => (
+              <button
+                key={s.exe}
+                className="playing-chip"
+                title={`Fill in ${s.exe}`}
+                onClick={() => setAppName(s.exe)}
+                disabled={available === false}
+              >
+                🔊 {s.exe}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="add-row">
           <input
             className="text-input"

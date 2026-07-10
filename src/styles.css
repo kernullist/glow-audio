@@ -522,6 +522,38 @@ body {
   color: var(--red);
 }
 
+.playing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 10px;
+}
+
+.playing-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--dim);
+  margin-right: 4px;
+}
+
+.playing-chip {
+  border: 1px solid #2b2d3c;
+  border-radius: 6px;
+  background: #1b1d28;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.playing-chip:hover {
+  color: var(--cyan);
+  border-color: var(--cyan);
+}
+
 .profile-row {
   display: flex;
   align-items: center;

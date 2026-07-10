@@ -10,7 +10,7 @@ mod monitor;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
@@ -80,10 +80,16 @@ pub struct SharedState
     pub config_dir: Mutex<PathBuf>,
     // v2 per-session routing
     pub routing_rules: Mutex<Vec<RoutingRule>>,
-    pub routing_available: AtomicBool,
+    // 0 = not probed yet, 1 = available, 2 = unavailable. Tri-state so the UI
+    // can tell "still starting up" apart from "this build cannot route".
+    pub routing_available: AtomicU8,
     // per-app remembered volume rules
     pub volume_rules: Mutex<Vec<VolumeRule>>,
 }
+
+const ROUTING_UNKNOWN: u8 = 0;
+const ROUTING_AVAILABLE: u8 = 1;
+const ROUTING_UNAVAILABLE: u8 = 2;
 
 // Channel handle to the MTA audio worker. Wrapped in a Mutex so it is Sync and
 // can be managed as Tauri state (mpsc::Sender is Send but not Sync).
@@ -237,33 +243,36 @@ fn audio_worker_loop(
             Ok(e) => e,
             Err(e) =>
             {
-                eprintln!("[GlowAudio][v2-routing] enumerator failed: {e}");
+                log::error!("[v2-routing] enumerator failed: {e}");
                 return;
             }
         };
 
-    // Activate the per-session routing factory. On failure, leave routing
-    // disabled and let the UI fall back to v1 default switching.
-    let engine = match RoutingEngine::new()
+    // Activate the per-session routing factory. On failure, routing stays
+    // disabled (UI falls back to v1 default switching) but the worker keeps
+    // running so remembered per-app volumes still auto-apply.
+    let mut reconciler = match RoutingEngine::new()
     {
-        Ok(e) =>
+        Ok(engine) =>
         {
-            eprintln!("[GlowAudio][v2-routing] engine ready [{}]", e.which());
-            e
+            log::info!("[v2-routing] engine ready [{}]", engine.which());
+            state
+                .routing_available
+                .store(ROUTING_AVAILABLE, Ordering::Relaxed);
+            let _ = app.emit("routing-available", ());
+            Some(Reconciler::new(engine))
         }
         Err(e) =>
         {
-            eprintln!("[GlowAudio][v2-routing] UNAVAILABLE: {e}");
-            state.routing_available.store(false, Ordering::Relaxed);
+            log::warn!("[v2-routing] unavailable on this build: {e}");
+            state
+                .routing_available
+                .store(ROUTING_UNAVAILABLE, Ordering::Relaxed);
             let _ = app.emit("routing-unavailable", format!("{e}"));
-            return;
+            None
         }
     };
 
-    state.routing_available.store(true, Ordering::Relaxed);
-    let _ = app.emit("routing-available", ());
-
-    let mut reconciler = Reconciler::new(engine);
     let mut volume_applier = VolumeApplier::new();
     let mut sys = System::new();
     // Signature of the present render-endpoint set, to detect hotplug between
@@ -305,26 +314,36 @@ fn audio_worker_loop(
                     }
                 }
 
-                let rules = state.routing_rules.lock().clone();
-                if let Err(e) = reconciler.reconcile(&rules, &sys, &enumerator)
+                if let Some(rec) = reconciler.as_mut()
                 {
-                    eprintln!("[GlowAudio][v2-routing] reconcile failed: {e}");
+                    let rules = state.routing_rules.lock().clone();
+                    if let Err(e) = rec.reconcile(&rules, &sys, &enumerator)
+                    {
+                        log::warn!("[v2-routing] reconcile failed: {e}");
+                    }
                 }
 
                 // Apply remembered per-app volumes to newly-seen sessions.
+                // Runs even when routing is unavailable on this build.
                 let vol_rules = state.volume_rules.lock().clone();
                 volume_applier.apply(&enumerator, &vol_rules);
             }
             Ok(AudioCommand::ClearAll) =>
             {
-                sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-                let _ = reconciler.revert_all(&sys);
-                let _ = reconciler.clear_os_store();
+                if let Some(rec) = reconciler.as_mut()
+                {
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                    let _ = rec.revert_all(&sys);
+                    let _ = rec.clear_os_store();
+                }
             }
             Ok(AudioCommand::Shutdown) | Err(_) =>
             {
-                sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-                let _ = reconciler.revert_all(&sys);
+                if let Some(rec) = reconciler.as_mut()
+                {
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                    let _ = rec.revert_all(&sys);
+                }
                 break;
             }
         }
@@ -497,10 +516,25 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String>
 // v2 routing commands
 // ---------------------------------------------------------------------------
 
+// None = worker has not finished probing yet; Some(bool) = definitive answer.
 #[tauri::command]
-fn routing_available(state: State<Arc<SharedState>>) -> bool
+fn routing_available(state: State<Arc<SharedState>>) -> Option<bool>
 {
-    state.routing_available.load(Ordering::Relaxed)
+    match state.routing_available.load(Ordering::Relaxed)
+    {
+        ROUTING_AVAILABLE =>
+        {
+            Some(true)
+        }
+        ROUTING_UNAVAILABLE =>
+        {
+            Some(false)
+        }
+        _ =>
+        {
+            None
+        }
+    }
 }
 
 #[tauri::command]
@@ -741,9 +775,10 @@ fn show_main_window(app: &AppHandle)
 fn setup_tray(app: &AppHandle) -> tauri::Result<()>
 {
     let show_item = MenuItem::with_id(app, "show", "Show GlowAudio", true, None::<&str>)?;
+    let cycle_item = MenuItem::with_id(app, "cycle", "Cycle Audio Device", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show_item, &separator, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show_item, &cycle_item, &separator, &quit_item])?;
 
     let mut builder = TrayIconBuilder::with_id("glow-tray")
         .tooltip("GlowAudio Desktop")
@@ -754,6 +789,15 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()>
             "show" =>
             {
                 show_main_window(app);
+            }
+            "cycle" =>
+            {
+                // Same action as the global hotkey: next active device + HUD.
+                if let Some((name, volume)) = cycle_default_device()
+                {
+                    show_hud(app, "GlowAudio Active", &name, volume);
+                    let _ = app.emit("devices-changed", ());
+                }
             }
             "quit" =>
             {
@@ -817,17 +861,29 @@ pub fn run()
         monitor_running: AtomicBool::new(true),
         config_dir: Mutex::new(PathBuf::from(".")),
         routing_rules: Mutex::new(Vec::new()),
-        routing_available: AtomicBool::new(false),
+        routing_available: AtomicU8::new(ROUTING_UNKNOWN),
         volume_rules: Mutex::new(Vec::new()),
     });
 
     let setup_state = state.clone();
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("glow-audio".into()),
+                    }),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            // Autostarted instances launch quietly into the tray.
+            Some(vec!["--minimized"]),
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -886,6 +942,13 @@ pub fn run()
             if let Some(win) = handle.get_webview_window("main")
             {
                 let _ = win.set_title(&format!("GlowAudio Desktop  v{version}  -  by kernullist"));
+
+                // Autostarted instances (see the autostart plugin args) launch
+                // quietly into the tray instead of popping the main window.
+                if std::env::args().any(|a| a == "--minimized")
+                {
+                    let _ = win.hide();
+                }
             }
 
             // Build the hidden HUD overlay window up front for instant display.
@@ -916,7 +979,7 @@ pub fn run()
             // Set up the system tray icon and menu.
             if let Err(e) = setup_tray(&handle)
             {
-                eprintln!("[GlowAudio] tray setup failed: {e}");
+                log::error!("tray setup failed: {e}");
             }
 
             // Launch the background process monitor.

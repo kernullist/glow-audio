@@ -64,8 +64,8 @@ export const api = {
 
   hideHud: () => invoke<void>("hide_hud"),
 
-  // v2 per-session routing
-  routingAvailable: () => invoke<boolean>("routing_available"),
+  // v2 per-session routing (null = worker still probing at startup)
+  routingAvailable: () => invoke<boolean | null>("routing_available"),
   getRoutingRules: () => invoke<RoutingRule[]>("get_routing_rules"),
   setRoutingRule: (rule: RoutingRule) =>
     invoke<RoutingRule[]>("set_routing_rule", { rule }),
