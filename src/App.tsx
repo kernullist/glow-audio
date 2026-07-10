@@ -11,6 +11,41 @@ import {
 
 type Tab = "devices" | "profiles" | "routing" | "volume" | "settings";
 
+// Throttle a numeric send to at most one call per `ms`, always flushing the
+// latest value at the end of the window. Range inputs fire onChange dozens of
+// times per second while dragging, and every backend call enumerates COM
+// devices/sessions - unthrottled, a single drag floods the audio engine.
+function useThrottledSend(send: (v: number) => void, ms = 80) {
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const timer = useRef<number | null>(null);
+  const pending = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    };
+  }, []);
+
+  return useCallback(
+    (value: number) => {
+      if (timer.current === null) {
+        sendRef.current(value);
+        timer.current = window.setTimeout(() => {
+          timer.current = null;
+          if (pending.current !== null) {
+            sendRef.current(pending.current);
+            pending.current = null;
+          }
+        }, ms);
+      } else {
+        pending.current = value;
+      }
+    },
+    [ms]
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("devices");
   const [hotkey, setHotkey] = useState<string>("");
@@ -206,9 +241,11 @@ function DeviceCard({
     setVol(Math.round(device.volume * 100));
   }, [device.volume]);
 
+  const pushVolume = useThrottledSend((v) => void api.setVolume(device.id, v / 100));
+
   const onVolume = (value: number) => {
     setVol(value);
-    void api.setVolume(device.id, value / 100);
+    pushVolume(value);
   };
 
   const makeDefault = async () => {
@@ -634,21 +671,33 @@ function SessionRow({
   onAfterChange: (exe: string, volume: number, muted: boolean) => void;
 }) {
   const [vol, setVol] = useState(Math.round(session.volume * 100));
+  const volRef = useRef(vol);
 
   useEffect(() => {
     setVol(Math.round(session.volume * 100));
+    volRef.current = Math.round(session.volume * 100);
   }, [session.volume]);
+
+  const pushVolume = useThrottledSend(
+    (v) => void api.setAppVolume(session.exe, v / 100)
+  );
 
   const onVolume = (value: number) => {
     setVol(value);
-    void api.setAppVolume(session.exe, value / 100);
-    void onAfterChange(session.exe, value / 100, session.muted);
+    volRef.current = value;
+    pushVolume(value);
+  };
+
+  // Persist the remembered rule once per adjustment (drag release / key up),
+  // not on every slider tick - each save writes to disk and pings the worker.
+  const commitRule = () => {
+    void onAfterChange(session.exe, volRef.current / 100, session.muted);
   };
 
   const toggleMute = async () => {
     await api.setAppMute(session.exe, !session.muted);
     // Sync with the live slider value, not the last-polled session volume.
-    void onAfterChange(session.exe, vol / 100, !session.muted);
+    void onAfterChange(session.exe, volRef.current / 100, !session.muted);
   };
 
   return (
@@ -679,6 +728,8 @@ function SessionRow({
           max={100}
           value={vol}
           onChange={(e) => onVolume(Number(e.target.value))}
+          onPointerUp={commitRule}
+          onKeyUp={commitRule}
           className="slider"
         />
         <span className="vol-label">{vol}%</span>
@@ -708,11 +759,16 @@ function SettingsView({
 }) {
   const [draft, setDraft] = useState(hotkey);
   const [status, setStatus] = useState<string | null>(null);
+  const [autostart, setAutostart] = useState(false);
 
   // Keep the editable draft in sync if the shared hotkey changes elsewhere.
   useEffect(() => {
     setDraft(hotkey);
   }, [hotkey]);
+
+  useEffect(() => {
+    void api.getAutostart().then(setAutostart);
+  }, []);
 
   const save = async () => {
     const value = draft.trim();
@@ -724,6 +780,17 @@ function SettingsView({
       setStatus(String(e));
     }
     window.setTimeout(() => setStatus(null), 3000);
+  };
+
+  const toggleAutostart = async () => {
+    const next = !autostart;
+    try {
+      await api.setAutostart(next);
+      setAutostart(next);
+    } catch (e) {
+      setStatus(String(e));
+      window.setTimeout(() => setStatus(null), 3000);
+    }
   };
 
   return (
@@ -749,6 +816,22 @@ function SettingsView({
           </button>
         </div>
         {status && <div className="status-line">{status}</div>}
+
+        <div className="settings-label" style={{ marginTop: 24 }}>
+          Startup
+        </div>
+        <p className="settings-desc">
+          GlowAudio only auto-switches devices and restores app volumes while it
+          is running. Enable this to start it (in the tray) when you log in.
+        </p>
+        <label className="comms-toggle">
+          <input
+            type="checkbox"
+            checked={autostart}
+            onChange={() => void toggleAutostart()}
+          />
+          Start GlowAudio when Windows starts
+        </label>
 
         <div className="info-panel">
           <div className="info-title">Supported Hotkey Syntax</div>

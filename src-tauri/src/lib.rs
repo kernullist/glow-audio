@@ -23,6 +23,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder,
     WindowEvent,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
@@ -95,6 +96,18 @@ pub enum AudioCommand
     Shutdown,  // revert applied routes and exit the worker
 }
 
+// Write a config file atomically: write to a temp sibling first, then rename
+// over the target. A crash or power loss mid-write can then never leave a
+// half-written JSON behind (rename replaces the destination on Windows).
+fn write_atomic(path: &std::path::Path, contents: &str)
+{
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, contents).is_ok()
+    {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 impl SharedState
 {
     fn profiles_path(&self) -> PathBuf
@@ -122,7 +135,7 @@ impl SharedState
         let guard = self.routing_rules.lock();
         if let Ok(json) = serde_json::to_string_pretty(&*guard)
         {
-            let _ = std::fs::write(self.routing_path(), json);
+            write_atomic(&self.routing_path(), &json);
         }
     }
 
@@ -131,7 +144,7 @@ impl SharedState
         let guard = self.volume_rules.lock();
         if let Ok(json) = serde_json::to_string_pretty(&*guard)
         {
-            let _ = std::fs::write(self.volume_path(), json);
+            write_atomic(&self.volume_path(), &json);
         }
     }
 
@@ -140,7 +153,7 @@ impl SharedState
         let guard = self.profiles.lock();
         if let Ok(json) = serde_json::to_string_pretty(&*guard)
         {
-            let _ = std::fs::write(self.profiles_path(), json);
+            write_atomic(&self.profiles_path(), &json);
         }
     }
 
@@ -151,7 +164,7 @@ impl SharedState
         map.insert("hotkey".into(), serde_json::Value::String(hotkey));
         if let Ok(json) = serde_json::to_string_pretty(&serde_json::Value::Object(map))
         {
-            let _ = std::fs::write(self.settings_path(), json);
+            write_atomic(&self.settings_path(), &json);
         }
     }
 
@@ -446,6 +459,38 @@ fn set_hotkey(app: AppHandle, state: State<Arc<SharedState>>, hotkey: String) ->
     *state.hotkey.lock() = hotkey;
     state.save_settings();
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Autostart commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> bool
+{
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String>
+{
+    // A dev build would register target\debug\glow-audio.exe in the Run key,
+    // which cannot start without the Vite dev server. Only allow enabling from
+    // a release build.
+    if cfg!(debug_assertions) && enabled
+    {
+        return Err("Autostart can only be enabled from a release build.".into());
+    }
+    let launcher = app.autolaunch();
+    let result = if enabled
+    {
+        launcher.enable()
+    }
+    else
+    {
+        launcher.disable()
+    };
+    result.map_err(|e| format!("autostart update failed: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -780,6 +825,10 @@ pub fn run()
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -807,6 +856,8 @@ pub fn run()
             get_hotkey,
             set_hotkey,
             hide_hud,
+            get_autostart,
+            set_autostart,
             routing_available,
             get_routing_rules,
             set_routing_rule,

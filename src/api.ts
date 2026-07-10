@@ -58,6 +58,10 @@ export const api = {
   getHotkey: () => invoke<string>("get_hotkey"),
   setHotkey: (hotkey: string) => invoke<void>("set_hotkey", { hotkey }),
 
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enabled: boolean) =>
+    invoke<void>("set_autostart", { enabled }),
+
   hideHud: () => invoke<void>("hide_hud"),
 
   // v2 per-session routing
