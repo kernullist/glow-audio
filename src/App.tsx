@@ -612,9 +612,21 @@ function VolumeView() {
   };
 
   // Keep the remembered value in sync while the app stays checked.
-  const syncRule = async (exe: string, volume: number, muted: boolean) => {
-    if (remembered(exe)) {
-      await api.setVolumeRule({ match_exe: exe, volume, muted, enabled: true });
+  //
+  // An idle app has no live session to receive the change, so the rule is the
+  // only place it can go - save one even if Remember was never ticked, or the
+  // adjustment would silently do nothing. Ticking the box to match keeps that
+  // visible rather than hiding it.
+  const syncRule = async (
+    exe: string,
+    volume: number,
+    muted: boolean,
+    active: boolean
+  ) => {
+    if (remembered(exe) || !active) {
+      setRules(
+        await api.setVolumeRule({ match_exe: exe, volume, muted, enabled: true })
+      );
     }
   };
 
@@ -628,14 +640,17 @@ function VolumeView() {
       </header>
 
       <p className="settings-desc">
-        Adjust the volume of each app that's currently playing audio. Tick{" "}
+        Adjust the volume of each app that has played audio recently. Apps marked{" "}
+        <b>idle</b> are still running but hold no audio session right now - a
+        browser that stopped playing, or a Bluetooth device that dropped out.
+        Changing an idle app is saved and applied the next time it plays. Tick{" "}
         <b>Remember</b> and GlowAudio re-applies that level automatically the next
         time the app starts.
       </p>
 
       <div className="scroll">
         {sessions.length === 0 && (
-          <div className="empty">No apps are playing audio right now.</div>
+          <div className="empty">No apps have played audio recently.</div>
         )}
         {sessions.map((s) => (
           <SessionRow
@@ -687,7 +702,12 @@ function SessionRow({
   session: AppSession;
   remembered: boolean;
   onRemember: (volume: number, muted: boolean) => void;
-  onAfterChange: (exe: string, volume: number, muted: boolean) => void;
+  onAfterChange: (
+    exe: string,
+    volume: number,
+    muted: boolean,
+    active: boolean
+  ) => void;
 }) {
   const [vol, setVol] = useState(Math.round(session.volume * 100));
   const volRef = useRef(vol);
@@ -710,17 +730,31 @@ function SessionRow({
   // Persist the remembered rule once per adjustment (drag release / key up),
   // not on every slider tick - each save writes to disk and pings the worker.
   const commitRule = () => {
-    void onAfterChange(session.exe, volRef.current / 100, session.muted);
+    void onAfterChange(
+      session.exe,
+      volRef.current / 100,
+      session.muted,
+      session.active
+    );
   };
 
   const toggleMute = async () => {
     await api.setAppMute(session.exe, !session.muted);
     // Sync with the live slider value, not the last-polled session volume.
-    void onAfterChange(session.exe, volRef.current / 100, !session.muted);
+    void onAfterChange(
+      session.exe,
+      volRef.current / 100,
+      !session.muted,
+      session.active
+    );
   };
 
   return (
-    <div className={`card ${remembered ? "card-active" : ""}`}>
+    <div
+      className={`card ${remembered ? "card-active" : ""} ${
+        session.active ? "" : "card-idle"
+      }`}
+    >
       <div className="card-icon">{session.muted ? "🔇" : "🔊"}</div>
 
       <div className="card-main">
@@ -730,6 +764,14 @@ function SessionRow({
         </div>
         <div className="badges">
           <span className="session-exe">{session.exe}</span>
+          {!session.active && (
+            <span
+              className="badge-idle"
+              title="Still running but not holding an audio session. Changes are saved and applied next time it plays."
+            >
+              idle
+            </span>
+          )}
         </div>
       </div>
 
@@ -779,6 +821,7 @@ function SettingsView({
   const [draft, setDraft] = useState(hotkey);
   const [status, setStatus] = useState<string | null>(null);
   const [autostart, setAutostart] = useState(false);
+  const [idleTtl, setIdleTtl] = useState("300");
 
   // Keep the editable draft in sync if the shared hotkey changes elsewhere.
   useEffect(() => {
@@ -787,6 +830,7 @@ function SettingsView({
 
   useEffect(() => {
     void api.getAutostart().then(setAutostart);
+    void api.getIdleTtl().then((s) => setIdleTtl(String(s)));
   }, []);
 
   const save = async () => {
@@ -798,6 +842,24 @@ function SettingsView({
     } catch (e) {
       setStatus(String(e));
     }
+    window.setTimeout(() => setStatus(null), 3000);
+  };
+
+  const saveIdleTtl = async () => {
+    const parsed = Number(idleTtl);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setStatus("Idle timeout must be a number of seconds, 0 or more.");
+      window.setTimeout(() => setStatus(null), 3000);
+      return;
+    }
+    // The backend clamps to its own range, so echo back what it accepted.
+    const applied = await api.setIdleTtl(Math.round(parsed));
+    setIdleTtl(String(applied));
+    setStatus(
+      applied === 0
+        ? "Saved. Only apps currently playing audio will be listed."
+        : `Saved. Idle apps stay listed for ${applied}s.`
+    );
     window.setTimeout(() => setStatus(null), 3000);
   };
 
@@ -835,6 +897,31 @@ function SettingsView({
           </button>
         </div>
         {status && <div className="status-line">{status}</div>}
+
+        <div className="settings-label" style={{ marginTop: 24 }}>
+          App Volume Idle Timeout
+        </div>
+        <p className="settings-desc">
+          How long an app keeps its row in <b>App Volume</b> after its audio
+          session goes away, in seconds. Browsers release their audio stream when
+          playback stops, and a disconnecting Bluetooth device takes every
+          session on it down at once - without this the row would vanish while
+          the app is still running. The row is dropped immediately once the
+          process exits. Set to 0 to list only apps that are playing right now.
+        </p>
+        <div className="add-row">
+          <input
+            className="text-input"
+            type="number"
+            min={0}
+            max={3600}
+            value={idleTtl}
+            onChange={(e) => setIdleTtl(e.target.value)}
+          />
+          <button className="btn-primary" onClick={() => void saveIdleTtl()}>
+            Save Timeout
+          </button>
+        </div>
 
         <div className="settings-label" style={{ marginTop: 24 }}>
           Startup

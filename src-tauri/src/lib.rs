@@ -10,7 +10,7 @@ mod monitor;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
@@ -31,7 +31,10 @@ use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTIT
 
 use audio::AudioDevice;
 use audio_router::{Reconciler, RoutingEngine, RoutingRule};
-use audio_volume::{AppSession, VolumeApplier, VolumeRule};
+use audio_volume::{
+    AppSession, SessionCache, VolumeApplier, VolumeRule, DEFAULT_IDLE_TTL_SECS, MAX_IDLE_TTL_SECS,
+    MIN_IDLE_TTL_SECS,
+};
 
 const DEFAULT_HOTKEY: &str = "Ctrl+Shift+A";
 const HUD_WIDTH: f64 = 340.0;
@@ -85,6 +88,11 @@ pub struct SharedState
     pub routing_available: AtomicU8,
     // per-app remembered volume rules
     pub volume_rules: Mutex<Vec<VolumeRule>>,
+    // Keeps recently seen apps in the mixer list while their sessions are gone.
+    // Shared so the command thread and the worker observe the same list.
+    pub session_cache: Mutex<SessionCache>,
+    // How long an idle app stays listed, in seconds. 0 disables the cache.
+    pub idle_ttl_secs: AtomicU64,
 }
 
 const ROUTING_UNKNOWN: u8 = 0;
@@ -168,6 +176,10 @@ impl SharedState
         let hotkey = self.hotkey.lock().clone();
         let mut map = serde_json::Map::new();
         map.insert("hotkey".into(), serde_json::Value::String(hotkey));
+        map.insert(
+            "idle_ttl_secs".into(),
+            serde_json::Value::from(self.idle_ttl_secs.load(Ordering::Relaxed)),
+        );
         if let Ok(json) = serde_json::to_string_pretty(&serde_json::Value::Object(map))
         {
             write_atomic(&self.settings_path(), &json);
@@ -190,6 +202,11 @@ impl SharedState
                 if let Some(hk) = parsed.get("hotkey").and_then(|v| v.as_str())
                 {
                     *self.hotkey.lock() = hk.to_string();
+                }
+                if let Some(ttl) = parsed.get("idle_ttl_secs").and_then(|v| v.as_u64())
+                {
+                    self.idle_ttl_secs
+                        .store(ttl.clamp(MIN_IDLE_TTL_SECS, MAX_IDLE_TTL_SECS), Ordering::Relaxed);
                 }
             }
         }
@@ -610,27 +627,53 @@ fn render_enumerator() -> Option<IMMDeviceEnumerator>
 }
 
 #[tauri::command]
-fn list_app_sessions() -> Vec<AppSession>
+fn list_app_sessions(state: State<Arc<SharedState>>) -> Vec<AppSession>
 {
-    match render_enumerator()
+    let en = match render_enumerator()
     {
-        Some(en) => audio_volume::list_app_sessions(&en),
-        None => Vec::new(),
-    }
+        Some(en) => en,
+        None =>
+        {
+            log::warn!("[volume] render enumerator unavailable, returning empty list");
+            return Vec::new();
+        }
+    };
+    let ttl = state.idle_ttl_secs.load(Ordering::Relaxed);
+    let mut cache = state.session_cache.lock();
+    audio_volume::list_app_sessions(&en, &mut cache, ttl)
 }
 
+// Returns the number of live sessions the change was applied to. 0 means the
+// app is idle right now, in which case only its remembered rule carries the
+// new level forward (the UI saves one on the caller's behalf).
 #[tauri::command]
-fn set_app_volume(exe: String, volume: f32) -> Result<(), String>
+fn set_app_volume(exe: String, volume: f32) -> Result<u32, String>
 {
     let en = render_enumerator().ok_or("audio enumerator unavailable")?;
     audio_volume::set_app_volume(&en, &exe.to_lowercase(), volume)
 }
 
 #[tauri::command]
-fn set_app_mute(exe: String, mute: bool) -> Result<(), String>
+fn set_app_mute(exe: String, mute: bool) -> Result<u32, String>
 {
     let en = render_enumerator().ok_or("audio enumerator unavailable")?;
     audio_volume::set_app_mute(&en, &exe.to_lowercase(), mute)
+}
+
+#[tauri::command]
+fn get_idle_ttl(state: State<Arc<SharedState>>) -> u64
+{
+    state.idle_ttl_secs.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn set_idle_ttl(state: State<Arc<SharedState>>, seconds: u64) -> u64
+{
+    let clamped = seconds.clamp(MIN_IDLE_TTL_SECS, MAX_IDLE_TTL_SECS);
+    state.idle_ttl_secs.store(clamped, Ordering::Relaxed);
+    state.save_settings();
+    log::info!("[volume] idle TTL set to {clamped}s");
+    clamped
 }
 
 #[tauri::command]
@@ -863,6 +906,8 @@ pub fn run()
         routing_rules: Mutex::new(Vec::new()),
         routing_available: AtomicU8::new(ROUTING_UNKNOWN),
         volume_rules: Mutex::new(Vec::new()),
+        session_cache: Mutex::new(SessionCache::new()),
+        idle_ttl_secs: AtomicU64::new(DEFAULT_IDLE_TTL_SECS),
     });
 
     let setup_state = state.clone();
@@ -925,6 +970,8 @@ pub fn run()
             get_volume_rules,
             set_volume_rule,
             remove_volume_rule,
+            get_idle_ttl,
+            set_idle_ttl,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

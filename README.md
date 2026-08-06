@@ -32,7 +32,7 @@ Floating HUD overlay shown on a device switch:
    auto-switches to the mapped device when a registered game launches.
 5. **Floating HUD overlay** — a borderless, transparent, always-on-top window that fades in/out at the bottom-right.
 6. **Per-app audio routing (v2)** — send individual apps (Chrome, Discord, games) to different output devices *simultaneously* via the undocumented `IAudioPolicyConfigFactory`, resolved per audio-session PID. Falls back gracefully to default-device switching on builds that don't support it.
-7. **Per-app volume control** — adjust each app's volume/mute (`ISimpleAudioVolume`) like the Windows Volume Mixer; "remember" an app to auto-restore its level the next time it launches.
+7. **Per-app volume control** — adjust each app's volume/mute (`ISimpleAudioVolume`) like the Windows Volume Mixer; "remember" an app to auto-restore its level the next time it launches. Apps that stopped playing stay listed as **idle** for a configurable timeout (browsers release their audio stream when idle, and a disconnecting Bluetooth endpoint drops every session bound to it), so a row never vanishes mid-adjustment — changes made while idle are saved and applied on next playback.
 8. **Start with Windows** — optional autostart toggle in Global Settings; autostarted instances launch quietly into the tray. The tray menu also offers one-click device cycling.
 9. **File logging** — runtime logs go to the OS app-log directory (`tauri-plugin-log`), so issues in release builds are diagnosable.
 

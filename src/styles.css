@@ -235,6 +235,25 @@ body {
   box-shadow: 0 0 18px rgba(0, 240, 255, 0.18);
 }
 
+/* Still running, but holding no audio session right now. Dimmed rather than
+   disabled: the controls stay usable and the change is saved as a rule. */
+.card-idle .card-icon,
+.card-idle .card-name,
+.card-idle .vol-label {
+  opacity: 0.55;
+}
+
+.badge-idle {
+  color: var(--muted);
+  border: 1px solid var(--muted);
+  border-radius: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: help;
+}
+
 .card-icon {
   font-size: 24px;
   width: 34px;

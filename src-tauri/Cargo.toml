@@ -1,6 +1,6 @@
 [package]
 name = "glow-audio"
-version = "0.5.0"
+version = "0.6.0"
 description = "GlowAudio Desktop - smart Windows audio router"
 authors = ["kernullist"]
 edition = "2021"
@@ -41,6 +41,9 @@ features = [
     "Win32_Devices_FunctionDiscovery",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_WinRT",
+    # GetProcessHandleCount, used by the enumeration soak test to prove the
+    # 1.5s poll does not leak handles over a long session.
+    "Win32_System_Threading",
 ]
 
 [target.'cfg(windows)'.dependencies.windows-core]

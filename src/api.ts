@@ -31,6 +31,9 @@ export interface AppSession {
   volume: number; // 0.0 - 1.0
   muted: boolean;
   session_count: number;
+  // false = no live audio session right now, but the process is still running
+  // and it was seen within the idle TTL. Edits are saved as a rule instead.
+  active: boolean;
 }
 
 export interface VolumeRule {
@@ -73,15 +76,20 @@ export const api = {
     invoke<RoutingRule[]>("remove_routing_rule", { matchExe }),
   clearRouting: () => invoke<void>("clear_routing"),
 
-  // per-app volume
+  // per-app volume. setAppVolume/setAppMute return how many live sessions were
+  // touched; 0 means the app is idle and only the remembered rule will carry it.
   listAppSessions: () => invoke<AppSession[]>("list_app_sessions"),
   setAppVolume: (exe: string, volume: number) =>
-    invoke<void>("set_app_volume", { exe, volume }),
+    invoke<number>("set_app_volume", { exe, volume }),
   setAppMute: (exe: string, mute: boolean) =>
-    invoke<void>("set_app_mute", { exe, mute }),
+    invoke<number>("set_app_mute", { exe, mute }),
   getVolumeRules: () => invoke<VolumeRule[]>("get_volume_rules"),
   setVolumeRule: (rule: VolumeRule) =>
     invoke<VolumeRule[]>("set_volume_rule", { rule }),
   removeVolumeRule: (matchExe: string) =>
     invoke<VolumeRule[]>("remove_volume_rule", { matchExe }),
+
+  // How long an app stays listed after its audio session goes away (seconds).
+  getIdleTtl: () => invoke<number>("get_idle_ttl"),
+  setIdleTtl: (seconds: number) => invoke<number>("set_idle_ttl", { seconds }),
 };
