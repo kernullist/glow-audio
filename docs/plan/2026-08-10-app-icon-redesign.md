@@ -113,7 +113,9 @@
 - [ ] 트레이 전용 아이콘 분리 필요 여부. 현재는 `default_window_icon()` 재사용
       (`src-tauri/src/lib.rs:884`). 어두운 플레이트라 라이트 테마 트레이에서도
       대비는 확보되지만, Windows 11 트레이는 16px 로 강제 축소하므로 실사용 후 판단.
-- [ ] 인스톨러 배너(NSIS `installerIcon` / 사이드바 BMP)는 미적용.
+- [x] 인스톨러 아트 → v0.6.1 에서 `installerIcon`, v0.6.2 에서 NSIS header/sidebar +
+      WiX banner/dialog 까지 적용 완료 (`--installer`). MSI 파일 자체의 아이콘은
+      Windows Installer 가 강제하므로 변경 불가.
 
 ## 8. 진행 로그
 
@@ -142,3 +144,14 @@
   재현 여부를 먼저 확인할 것 (개별 산출은 전부 정상이었다).
   이 프로젝트는 데스크톱 전용이라 `[lib] crate-type` 에서 `staticlib`/`cdylib` 를
   제거하는 선택지도 있으나, 이번 작업 범위 밖이라 손대지 않았다.
+- 2026-08-10: v0.6.1 릴리즈 후 자산을 검사하다 **NSIS 설치 파일이 기본 NSIS 아이콘**을
+  달고 있는 것을 발견 → `installerIcon` 지정. 이어서 마법사 화면 자체도 기본 이미지라
+  §2 에서 제외했던 인스톨러 아트를 범위에 넣어 v0.6.2 로 처리했다(사용자 승인).
+  - 크기/포맷은 NSIS/WiX 가 고정한다: 150x57, 164x314, 493x58, 493x312, **24bpp BMP**.
+    알파 채널이나 PNG 는 거부된다.
+  - WiX 다이얼로그(493x312)는 전면 아트로 만들면 안 된다. WixUI 가 제목/본문 텍스트를
+    검은색으로 그 위에 그리므로, 좌측 164px 만 다크 패널로 두고 나머지는 흰색으로 남겼다.
+  - 검증 방법: NSIS 는 `target/release/nsis/x64/installer.nsi` 의 `HEADERIMAGE` /
+    `SIDEBARIMAGE` 정의 확인. MSI 는 `WindowsInstaller.Installer` COM 으로 Binary
+    테이블을 읽어 `WixUI_Bmp_Banner` / `WixUI_Bmp_Dialog` 의 바이트 수가 생성물과
+    일치하는지 확인(각각 85,894 / 461,814). 마법사를 실제로 실행해 눈으로 본 것은 아니다.

@@ -2,6 +2,23 @@
 
 의미 있는 변경만 기록한다. 날짜는 절대 표기(YYYY-MM-DD).
 
+## v0.6.2 - 2026-08-10
+
+### Changed
+
+- **인스톨러 마법사에 브랜드 아트 적용** (2026-08-10). v0.6.1 에서 설치 파일 아이콘까지는
+  바꿨지만 마법사 화면 자체는 NSIS/WiX 기본 이미지였다.
+  - NSIS: `headerImage`(150x57), `sidebarImage`(164x314)
+  - WiX(MSI): `bannerPath`(493x58), `dialogImagePath`(493x312)
+  - 네 장 모두 `python tools/make_icon.py --installer` 로 생성한다.
+    산출물은 `src-tauri/installer/*.bmp`. **알파 없는 24bpp BMP 고정** —
+    NSIS/WiX 가 PNG 나 32bpp 알파 BMP 를 받지 않는다.
+  - 큰 두 장(사이드바 / WiX 다이얼로그)은 앱과 같은 다크 네온 패널이고, 작은 두 장은
+    설치 마법사의 흰 크롬 위에 얹히므로 라이트 배경으로 만들었다. WiX 다이얼로그는
+    WixUI 가 본문 텍스트를 그리는 영역을 피해 **좌측 164px 만** 아트 패널이다.
+  - 검증: `installer.nsi` 의 `HEADERIMAGE` / `SIDEBARIMAGE` 정의와, MSI Binary 테이블의
+    `WixUI_Bmp_Banner`(85,894 B) / `WixUI_Bmp_Dialog`(461,814 B) 가 생성물과 바이트 일치.
+
 ## v0.6.1 - 2026-08-10
 
 ### Changed

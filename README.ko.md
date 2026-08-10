@@ -99,7 +99,11 @@ python tools/make_icon.py --sheet          # 시안 비교 (16/24/32px 축소 �
 python tools/make_icon.py --master dial    # 1024px 마스터 -> src-tauri/icons/icon-source.png
 npx tauri icon src-tauri/icons/icon-source.png
 python tools/make_icon.py --assets dial    # icon.ico(9종) + 소형 PNG + 웹 favicon 재작성
+python tools/make_icon.py --installer      # NSIS/WiX 마법사 비트맵 -> src-tauri/installer/
 ```
+
+인스톨러 아트는 NSIS/WiX 가 요구하는 정확한 크기(150x57 / 164x314 / 493x58 / 493x312)의
+**24bpp BMP** 여야 합니다. 둘 다 PNG 도, 알파 채널도 받지 않습니다.
 
 > ⚠️ `tauri-build` 은 아이콘에 대해 `cargo:rerun-if-changed` 를 내보내지 **않습니다**.
 > `icon.ico` 만 교체하면 이전에 컴파일된 리소스가 캐시에 남아 exe 에는 옛 아이콘이 그대로

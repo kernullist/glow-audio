@@ -101,7 +101,11 @@ python tools/make_icon.py --sheet          # compare concepts (incl. 16/24/32px 
 python tools/make_icon.py --master dial    # 1024px master -> src-tauri/icons/icon-source.png
 npx tauri icon src-tauri/icons/icon-source.png
 python tools/make_icon.py --assets dial    # rewrite icon.ico (9 sizes), small PNGs, web favicon
+python tools/make_icon.py --installer      # NSIS/WiX wizard bitmaps -> src-tauri/installer/
 ```
+
+The installer artwork must stay 24bpp BMP at the exact sizes NSIS and WiX expect
+(150x57 / 164x314 / 493x58 / 493x312); neither accepts PNG or an alpha channel.
 
 > ⚠️ `tauri-build` does **not** emit `cargo:rerun-if-changed` for the icons, so replacing
 > `icon.ico` alone leaves the previously compiled resource in the cache and the exe keeps the

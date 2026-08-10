@@ -299,8 +299,9 @@ def render(concept, size, glow=None, compact=None):
 # ---------------------------------------------------------------------- sheet
 
 
-def _font(px):
-    for name in ("segoeui.ttf", "arial.ttf"):
+def _font(px, bold=False):
+    names = ("segoeuib.ttf", "arialbd.ttf") if bold else ("segoeui.ttf", "arial.ttf")
+    for name in names:
         path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", name)
         if os.path.exists(path):
             return ImageFont.truetype(path, px)
@@ -435,6 +436,170 @@ def write_assets(concept, icons_dir, public_dir):
     print(f"wrote {fav} (256x256)")
 
 
+# ----------------------------------------------------------------- installers
+#
+# NSIS and WiX both want plain BMP (no alpha), at fixed sizes:
+#   NSIS  headerImage       150x57    top-right strip on every inner page
+#   NSIS  sidebarImage      164x314   welcome / finish page
+#   WiX   bannerPath        493x58    top banner on the inner pages
+#   WiX   dialogImagePath   493x312   welcome / exit dialog background
+# The two "banner" images sit on the installer's white chrome, so they are
+# built light. The two large ones are ours end to end, so they get the dark
+# neon panel - but only on the left 164px of the WiX dialog, because WixUI
+# draws its title and body text over the rest.
+
+INSTALLER_SIZES = {
+    "nsis-header.bmp": (150, 57),
+    "nsis-sidebar.bmp": (164, 314),
+    "wix-banner.bmp": (493, 58),
+    "wix-dialog.bmp": (493, 312),
+}
+
+INK = (32, 34, 47)
+PANEL_W = 164
+
+
+def panel_gradient(w, h, c0, c1):
+    """Diagonal gradient over an arbitrary rectangle."""
+    grad = Image.new("RGB", (w, h))
+    px = grad.load()
+    span = max(1, (w - 1) + (h - 1))
+    ramp = [
+        (
+            int(c0[0] + (c1[0] - c0[0]) * s / span),
+            int(c0[1] + (c1[1] - c0[1]) * s / span),
+            int(c0[2] + (c1[2] - c0[2]) * s / span),
+        )
+        for s in range(span + 1)
+    ]
+    for y in range(h):
+        for x in range(w):
+            px[x, y] = ramp[x + y]
+    return grad
+
+
+def glyph_art(concept, size, compact=False):
+    """The glyph and its two glow passes, without the icon plate."""
+    N = size * SS
+    mask = CONCEPTS[concept](N, compact)
+    grad = linear_gradient(N, CYAN, PURPLE, mask.getbbox())
+    parts = (
+        colorize(mask, CYAN, PURPLE, grad),
+        colorize(mask.filter(ImageFilter.GaussianBlur(N * 0.045)), CYAN, PURPLE, grad),
+        colorize(mask.filter(ImageFilter.GaussianBlur(N * 0.012)), CYAN, PURPLE, grad),
+    )
+    return tuple(p.resize((size, size), Image.LANCZOS) for p in parts)
+
+
+def paste_glyph(bg_rgb, concept, size, xy, glow=1.0):
+    """Screen the glow onto an RGB background, then composite the glyph."""
+
+    def placed(layer):
+        c = Image.new("RGBA", bg_rgb.size, (0, 0, 0, 0))
+        c.paste(layer, xy)
+        return c
+
+    layer, wide, tight = glyph_art(concept, size)
+    out = screen_over(bg_rgb, placed(wide), 0.55 * glow)
+    out = screen_over(out, placed(tight), 0.75 * glow)
+    return Image.alpha_composite(out.convert("RGBA"), placed(layer)).convert("RGB")
+
+
+def _centered(draw, text, font, cx, y, fill):
+    draw.text((cx - draw.textlength(text, font=font) / 2, y), text, font=font, fill=fill)
+
+
+def _tracked(draw, text, font, cx, y, fill, tracking=2):
+    """Letter-spaced small caps line; Pillow has no tracking option."""
+    widths = [draw.textlength(ch, font=font) for ch in text]
+    total = sum(widths) + tracking * (len(text) - 1)
+    x = cx - total / 2
+    for ch, w in zip(text, widths):
+        draw.text((x, y), ch, font=font, fill=fill)
+        x += w + tracking
+
+
+def brand_panel(w, h, concept="dial"):
+    """Dark neon panel: glowing glyph over a wordmark. Used by both big images."""
+    img = panel_gradient(w, h, (18, 20, 30), (7, 8, 12))
+
+    # Cyan bloom behind the glyph so the panel is not a flat rectangle.
+    bloom = Image.new("L", (w, h), 0)
+    r = int(w * 0.62)
+    ImageDraw.Draw(bloom).ellipse([w // 2 - r, int(h * 0.30) - r, w // 2 + r, int(h * 0.30) + r], fill=52)
+    bloom = bloom.filter(ImageFilter.GaussianBlur(w * 0.30))
+    tint = Image.new("RGBA", (w, h), CYAN + (0,))
+    tint.putalpha(bloom)
+    img = screen_over(img, tint, 0.6)
+
+    g = int(w * 0.56)
+    img = paste_glyph(img, concept, g, ((w - g) // 2, int(h * 0.16)))
+
+    d = ImageDraw.Draw(img)
+    cx = w / 2
+    base = int(h * 0.16) + g + int(h * 0.055)
+    _centered(d, "GlowAudio", _font(19, bold=True), cx, base, (226, 249, 255))
+    _tracked(d, "DESKTOP", _font(9), cx, base + 26, (120, 126, 145), tracking=3)
+
+    # Short neon rule under the wordmark.
+    rule_w, rule_y = int(w * 0.34), base + 48
+    rule = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(rule).rectangle(
+        [cx - rule_w / 2, rule_y, cx + rule_w / 2, rule_y + 1], fill=255
+    )
+    grad = linear_gradient(max(w, h), CYAN, PURPLE).resize((w, h))
+    line = grad.convert("RGBA")
+    line.putalpha(rule)
+    img = screen_over(img, line, 0.9)
+    return img
+
+
+def installer_header(w, h):
+    """White strip: wordmark on the left, app tile on the right."""
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    tile = render("dial", 40)
+    img.paste(tile, (w - 40 - 10, (h - 40) // 2), tile)
+    d = ImageDraw.Draw(img)
+    d.text((12, h // 2 - 15), "GlowAudio", font=_font(14, bold=True), fill=INK)
+    d.text((13, h // 2 + 3), "Smart audio router", font=_font(10), fill=(122, 128, 145))
+    return img
+
+
+def installer_wix_banner(w, h):
+    """White banner: WixUI writes its title on the left, so brand on the right."""
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    tile = render("dial", 38)
+    img.paste(tile, (w - 38 - 14, (h - 38) // 2), tile)
+    d = ImageDraw.Draw(img)
+    label = "GlowAudio"
+    f = _font(15, bold=True)
+    d.text((w - 38 - 24 - d.textlength(label, font=f), h // 2 - 10), label, font=f, fill=INK)
+    return img
+
+
+def installer_wix_dialog(w, h):
+    """Dark art panel on the left; the rest stays white for WixUI's text."""
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    img.paste(brand_panel(PANEL_W, h), (0, 0))
+    return img
+
+
+def write_installer_art(out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    builders = {
+        "nsis-header.bmp": installer_header,
+        "nsis-sidebar.bmp": lambda w, h: brand_panel(w, h),
+        "wix-banner.bmp": installer_wix_banner,
+        "wix-dialog.bmp": installer_wix_dialog,
+    }
+    for name, (w, h) in INSTALLER_SIZES.items():
+        img = builders[name](w, h)
+        assert img.size == (w, h), f"{name}: expected {(w, h)}, got {img.size}"
+        path = os.path.join(out_dir, name)
+        img.convert("RGB").save(path)  # 24bpp BMP; NSIS/WiX reject alpha
+        print(f"wrote {path} ({w}x{h} BMP)")
+
+
 def main():
     ap = argparse.ArgumentParser(description="GlowAudio icon generator")
     ap.add_argument("--sheet", metavar="PATH", nargs="?", const="icon-concepts.png")
@@ -444,6 +609,11 @@ def main():
         metavar="CONCEPT",
         choices=list(CONCEPTS),
         help="rewrite icon.ico, the small PNGs and the web favicon (run after `tauri icon`)",
+    )
+    ap.add_argument(
+        "--installer",
+        action="store_true",
+        help="write the NSIS/WiX installer bitmaps into src-tauri/installer/",
     )
     ap.add_argument(
         "--out",
@@ -462,7 +632,9 @@ def main():
             os.path.join(REPO_ROOT, "src-tauri", "icons"),
             os.path.join(REPO_ROOT, "public"),
         )
-    if not (args.sheet or args.master or args.assets):
+    if args.installer:
+        write_installer_art(os.path.join(REPO_ROOT, "src-tauri", "installer"))
+    if not (args.sheet or args.master or args.assets or args.installer):
         ap.print_help()
         return 1
     return 0
