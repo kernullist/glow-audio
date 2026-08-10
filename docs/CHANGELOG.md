@@ -2,6 +2,26 @@
 
 의미 있는 변경만 기록한다. 날짜는 절대 표기(YYYY-MM-DD).
 
+## v0.6.1 - 2026-08-10
+
+### Changed
+
+- **앱 아이콘 신규 제작** (2026-08-10). 기본 Tauri 로고를 걷어내고 앱 UI 와 같은
+  네온 톤(cyan `#00f0ff` → purple `#b026ff`)의 볼륨 다이얼 링 + 이퀄라이저 바
+  마크로 교체했다. 작업표시줄 / 트레이 / exe 리소스 / 인스톨러에 모두 적용된다.
+  - 생성 스크립트를 리포에 커밋: [tools/make_icon.py](../tools/make_icon.py).
+    시안 비교(`--sheet`), 1024px 마스터(`--master`), 소형 사이즈 보정(`--assets`)을 담당한다.
+  - `icon.ico` 를 직접 작성해 16/20/24/32/40/48/64/128/256 **9종**을 담았다
+    (`tauri icon` 기본 출력은 16/32/128/256 4종뿐이라 48px 계열이 확대되어 뭉갰다).
+    16~32px 항목은 글로우를 줄이고 스트로크를 굵힌 별도 렌더를 쓴다.
+  - NSIS 설치 파일(`GlowAudio_*_x64-setup.exe`) 자체도 기본 NSIS 아이콘을 달고
+    있어서 `bundle.windows.nsis.installerIcon` 을 지정했다. MSI 는 Windows Installer
+    아이콘이 강제되어 변경 불가.
+  - 웹 favicon 을 `public/icon.png` 로 교체하고 `index.html` 의 스캐폴딩 잔재
+    (`vite.svg` favicon, "Tauri + React + Typescript" 타이틀)를 정리했다.
+    사용되지 않던 `public/vite.svg`, `public/tauri.svg` 삭제.
+  - 배경/근거: [docs/plan/2026-08-10-app-icon-redesign.md](plan/2026-08-10-app-icon-redesign.md)
+
 ## v0.6.0 - 2026-08-07
 
 ### Fixed

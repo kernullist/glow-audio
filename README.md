@@ -94,6 +94,19 @@ Artifacts:
 
 npm aliases are also available: `npm run app:build` (full), `npm run app:exe` (exe only), `npm run app:dev` (dev).
 
+### App icon
+The icon is generated, not hand-drawn — edit [tools/make_icon.py](tools/make_icon.py) and re-run:
+```powershell
+python tools/make_icon.py --sheet          # compare concepts (incl. 16/24/32px shrink test)
+python tools/make_icon.py --master dial    # 1024px master -> src-tauri/icons/icon-source.png
+npx tauri icon src-tauri/icons/icon-source.png
+python tools/make_icon.py --assets dial    # rewrite icon.ico (9 sizes), small PNGs, web favicon
+```
+
+> ⚠️ `tauri-build` does **not** emit `cargo:rerun-if-changed` for the icons, so replacing
+> `icon.ico` alone leaves the previously compiled resource in the cache and the exe keeps the
+> old icon. Touch `src-tauri/build.rs` (or `cargo clean -p glow-audio`) before rebuilding.
+
 ### Hotkey
 - Default global hotkey: **`Ctrl+Shift+A`** — cycle the active device + show the HUD popup.
 - Changeable in the `Global Settings` tab using a format like `Ctrl+Alt+S` (modifier + key, joined by `+`).

@@ -92,6 +92,20 @@ cargo PATH 처리·prerequisite 점검·산출물 경로 출력까지 자동화�
 
 npm 별칭도 추가되어 있습니다: `npm run app:build`(전체), `npm run app:exe`(exe만), `npm run app:dev`(개발).
 
+### 앱 아이콘
+아이콘은 손으로 그린 게 아니라 생성됩니다. [tools/make_icon.py](tools/make_icon.py) 를 수정하고 다시 실행하세요:
+```powershell
+python tools/make_icon.py --sheet          # 시안 비교 (16/24/32px 축소 가독성 포함)
+python tools/make_icon.py --master dial    # 1024px 마스터 -> src-tauri/icons/icon-source.png
+npx tauri icon src-tauri/icons/icon-source.png
+python tools/make_icon.py --assets dial    # icon.ico(9종) + 소형 PNG + 웹 favicon 재작성
+```
+
+> ⚠️ `tauri-build` 은 아이콘에 대해 `cargo:rerun-if-changed` 를 내보내지 **않습니다**.
+> `icon.ico` 만 교체하면 이전에 컴파일된 리소스가 캐시에 남아 exe 에는 옛 아이콘이 그대로
+> 박힙니다. 다시 빌드하기 전에 `src-tauri/build.rs` 를 touch 하거나
+> `cargo clean -p glow-audio` 를 실행하세요.
+
 ### 단축키
 - 기본 전역 단축키: **`Ctrl+Shift+A`** — 활성 장치 순환 전환 + HUD 팝업.
 - `Global Settings` 탭에서 `Ctrl+Alt+S` 같은 형식으로 변경 가능 (modifier + key, `+`로 연결).
